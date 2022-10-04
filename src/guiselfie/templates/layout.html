@@ -1,0 +1,89 @@
+{% extends "layout_basic.html" %}
+{% block script %}
+   <script type="text/javascript">
+      var $SCRIPT_ROOT = {{ request.script_root | tojson | safe }};
+
+      function gen_alert_error(xhr) {
+         var json_err="";
+         if (typeof xhr.responseJSON!=="undefined") {
+            json_err = xhr.responseJSON['Error']
+         }
+         var err = xhr['status'] + ':' + xhr['statusText']  + " " + json_err
+         return err;
+      }
+
+      function gen_alert_html(err) {
+         var html = '<div class="alert alert-danger alert-dismissible" role="alert">'
+         html += '<button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>'
+         html += '<strong>Error!</strong> ' + err
+         html += '</div>'
+         return html;
+      }
+
+      function gen_alert(xhr) {
+         var err = gen_alert_error(xhr);
+         var html = gen_alert_html(err);
+         $('#alert').append(html);
+      }
+
+      function gen_result_html(result) {
+         html = '<div class="alert alert-success alert-dismissible" role="alert">'
+         html += '<button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>'
+         html += '<strong>Success!</strong> ' + result
+         html += '</div>'
+         return html 
+      }
+
+      function gen_result(result) {
+         gen_result_html(result);
+         $('#alert').append(html);
+      }
+
+      $(document)
+         .ajaxStart(function () {
+            $('#loadingDiv').show();
+         })
+         .ajaxStop(function () {
+            $('#loadingDiv').hide();
+         });
+   </script>
+{% endblock %}
+{% block navbar_content %}
+   <div id="navbar" class="navbar-collapse collapse">
+      <ul class="nav navbar-nav">
+         <li>
+            {% with msgs = get_flashed_messages(with_categories=true) %}
+               {% if msgs %}
+                  <div class="headerflash">
+                     <ul>
+                        {% for category, msg in msgs %}
+                           {% if msg != "Please log in to access this page." %}
+                              <li class="{{ category }}">{{ msg }}</li>
+                           {% endif %}
+                        {% endfor %}
+                     </ul>
+                  </div>
+               {% endif %}
+            {% endwith %}
+         </li>
+      </ul>
+      {% block navbar_content_menu %}
+         <ul class="nav navbar-nav navbar-right">
+            <li><a href="{{ url_for_security('logout') }}"><span class="glyphicon glyphicon-log-out" aria-hidden="true"></span> Log out</a></li>
+         </ul>
+      {% endblock %}              
+    </div><!--/.nav-collapse -->
+{% endblock %}              
+{% block content %}
+   {% if not current_user.is_authenticated %}
+      <b><a href="{{ url_for('security.login') }}">Log in</a></b>
+   {% else %}
+      {% for message in get_flashed_messages() %}
+      {% endfor %}
+		<div id="alert"></div>
+      <div id="loadingDiv" class="spinner">
+         <img src="/static/images/Gear-1s-100px-litegreen.gif">
+      </div>
+      {% block body %}{% endblock %}
+   {% endif %}
+{% endblock %}              

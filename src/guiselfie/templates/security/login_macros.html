@@ -1,0 +1,15 @@
+{% macro render_errors() %}
+    {% for field in varargs %}
+        {% if field.errors %}
+            <ul>
+            {% for error in field.errors %}
+               <li class="error">{{ error }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+    {% endfor %}
+{% endmacro %}
+
+{% macro render_submit_button(field) %}
+  <button class="btn btn-default btn-lg summaryButton btn-qosblue" width="80px" type="submit" id={{field.id}}>Sign in</button>
+{% endmacro %}

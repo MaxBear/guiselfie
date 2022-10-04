@@ -1,0 +1,9 @@
+{% extends "security/email/layout.html" %}
+{% block body %}
+	<tr>
+		<td style="font-family:Arial, Helvetica, sans-serif; color:#666;">To reset your password, please click on the following link:</td>
+	</tr>
+	<tr>
+		<td><a href="{{ reset_link }}">{{reset_link}}</a></td>
+	</tr>
+{% endblock %}

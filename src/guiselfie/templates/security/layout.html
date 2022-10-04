@@ -1,0 +1,17 @@
+{% extends "layout_basic.html" %}
+{% block content %}
+   {% block security_header %}{% endblock %}
+   {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+         <ul class="flashes">
+         {% for category, message in messages %}
+            {% if message != "Please log in to access this page." %}
+               <li class="{{ category }}">{{ message }}</li>
+            {% endif %}
+         {% endfor %}
+         </ul>
+      {% endif %}
+   {% endwith %}
+   {% block security_body %}
+   {% endblock %}
+{% endblock %}

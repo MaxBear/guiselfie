@@ -1,0 +1,43 @@
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Selfie.VC Customer Portal</title>
+        <link rel="shortcut icon" href="{{ url_for('static', filename='images/favicon.ico') }}">
+        <script type="text/javascript" src="/static/bower_components/jquery/dist/jquery.min.js"></script>
+        <link rel="stylesheet" href="/static/bower_components/bootstrap/dist/css/bootstrap.min.css">
+        <script type="text/javascript" src="/static/bower_components/bootstrap/dist/js/bootstrap.min.js"></script>
+	     <script type="text/javascript" src="/static/bower_components/moment/min/moment.min.js"></script>
+        <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='css/style.css') }}">
+        <script type="text/javascript">
+            var $SCRIPT_ROOT = {{ request.script_root | tojson | safe }};        
+        </script>
+    </head>
+    {% block head %}
+    {% endblock %}
+    {% block script %}
+    {% endblock %}
+    <body>
+        <nav class="navbar navbar-default navbar-static-top">
+            <div class="container">
+                <div class="navbar-header">
+                    <a href="{{ url_for('login')}}"><img src="/static/images/logo.png" width="150px" vspace="10"></a>
+                </div>
+                {% block navbar_content %}
+                {% endblock %}
+            </div>
+        </nav>
+        <div class="container">
+            <div class="metanav">
+               {% block content %}
+               {% endblock %}
+            </div>
+        </div>
+        <div class="footer">
+            <div class="container">
+               Selfie.VC is a product of Media Network Services (MNS). ©2020 MNS. All rights reserved. Version: {{version}}
+            </div>
+        </div>
+    </body>
+</html>

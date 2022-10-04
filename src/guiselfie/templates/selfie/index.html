@@ -1,0 +1,969 @@
+{% extends "layout.html" %}
+{% block navbar_content_menu %}
+   <ul class="nav navbar-nav navbar-right">
+      <li><a href="javascript:gen_alerts()"><span class="glyphicon glyphicon-bell" aria-hidden="true"></span> Alert Rules</a></li>
+      <li><a href="{{ url_for_security('logout') }}"><span class="glyphicon glyphicon-log-out" aria-hidden="true"></span> Log out</a></li>
+   </ul>
+{% endblock %}
+{% block body %}	   
+	<style>
+	   #legend {
+         font: 12px sans-serif;  
+	   }
+
+	   #chart{
+         font: 10px sans-serif;
+	   }
+
+	   .axis path,
+	   .axis line {
+         fill: none;
+         stroke: #000;
+         shape-rendering: crispEdges;
+	   }
+
+	   .line {
+         fill: none;
+         stroke: steelblue;
+         stroke-width: 1.5px;
+	   }
+
+	   .tick line{
+		   opacity: 0.2;
+	   }
+
+      .tooltip{
+	      position      : absolute;
+	      text-align    : left;
+	      max-height    : 30px;
+	      padding       : 0px;
+	      border        : none;
+	      border-radius : 8px;
+	      margin-top    : -30px;
+	      font          : 12px sans-serif;
+	      color         : black;
+	      pointer-events: none;
+      }
+	</style>
+
+	<script src="/static/js/utils.js"></script>
+	<script type="text/javascript" src="/static/js/d3.v3.min.js"></script>
+	<script type="text/javascript" src="/static/bower_components/eonasdan-bootstrap-datetimepicker/build/js/bootstrap-datetimepicker.min.js"></script>
+	<link rel="stylesheet" href="/static/bower_components/eonasdan-bootstrap-datetimepicker/build/css/bootstrap-datetimepicker.min.css" />
+	<script type="text/javascript">
+      var DefaultPageSize = 30;
+      var DefaultWindowSize = 20;
+	   var DATETIME_FORMAT_D3 = "%Y-%m-%d %H:%M:%S";
+	   var DATETIME_FORMAT_MOMENT = "YYYY-MM-DD HH:mm:ss";
+
+	   var $loading = $('#loadingDiv');
+	   $(document)
+	   .ajaxStart(function () {
+		  $('#loadingDiv').show();
+	   })
+	   .ajaxStop(function () {
+		  $('#loadingDiv').hide();
+	   });
+
+	   //
+	   // d3js related
+	   //
+	   var svg, Tooltip;
+	   var barNames = ['calls'];
+	   var colorStack = d3.scale.category20c(); 
+
+	   var dim = {t:25, r:200, b:50, l:50}
+	   dim.w = 1200 - dim.l - dim.r,
+	   dim.h = 650 - dim.t - dim.b;
+
+	   var legends = d3.scale.category10();  
+		   
+	   var x0 = d3.scale.ordinal().rangeRoundBands([0, dim.w], .1);
+	   var x1 = d3.scale.ordinal();
+   
+	   var y0 = d3.scale.linear().range([dim.h, 0]);
+	   var y1 = d3.scale.linear().range([dim.h, 0]);
+	
+	   var xAxis = d3.svg.axis()
+		   .scale(x0)
+		   .orient("bottom")
+		   .innerTickSize(-dim.h);
+   
+	   var yAxisLeft = d3.svg.axis()
+		   .scale(y0)
+		   .orient("left");
+
+	   var formatTime = d3.time.format(DATETIME_FORMAT_D3);
+
+	   function barPrefix(barName) {
+		   var tokens = barName.split('-');
+		   return tokens[0];
+	   }
+
+      function transform_data(dst_tags, data, time_scale) {		  
+         var data_stack = d3.nest()
+            .key(function(d) { 
+               var dd = convert_to_local(d.time)
+               return Utils.truncateDatetime(formatTime.parse(dd), time_scale); 
+         })				 
+			.key(function(d) { return d.dst_tag; })				  
+			.rollup(function(entries) { return {"calls": entries.length}}) 
+			.map(data);
+
+		   var stats_stack = []
+		   d3.keys(data_stack).forEach(function(k) {				
+            var total_calls = 0;
+            var stats_vals = {};
+            for (var i=0; i< dst_tags.length; i++) {
+               stats_vals[dst_tags[i]] = 0;
+            }
+			   
+            d3.keys(data_stack[k]).forEach(function(kk) {
+               var cval = data_stack[k][kk]['calls'];
+               if (kk in stats_vals) {
+                  stats_vals[kk] = cval;
+               }
+               total_calls += cval;
+            })
+
+            var ss = {'time': k, 'total_calls': total_calls, stats: []}
+            d3.keys(stats_vals).forEach(function(kk) {
+               var index = dst_tags.indexOf(kk);
+               var lower = 0;
+               var upper = 0;
+               if (index==0) {
+                  upper = stats_vals[kk];
+               } else {
+                  for (var i=0; i<index; i++) {
+                     lower += stats_vals[dst_tags[i]];
+                  }
+                  upper = lower + stats_vals[kk];
+               }
+               ss.stats.push({name: kk, value: [lower, upper]});
+            })
+            stats_stack.push(ss);
+         })		
+         return stats_stack;
+      }
+   
+      function zoomin_hour(dst_tags, data, year, month, day) {
+		   var fdata = data.filter(function(d) {
+			   var dd = convert_to_local(d.time)
+			   var dt = formatTime.parse(dd);
+			   return dt.getFullYear()==year && dt.getMonth()+1==month && dt.getDate()==day;
+		   })
+		   return transform_data(dst_tags, fdata, "minute");
+	   }
+
+	   function init_graph(dst_tags) {
+
+   	   colorStack.domain(dst_tags);
+
+		   svg = d3.select("#chart").append("svg")
+			   .attr("width", dim.w + dim.l + dim.r)
+			   .attr("height", dim.h + dim.b + dim.t)
+			   .append("g")
+			   .attr("transform", "translate(" + dim.l + "," + dim.t + ")");
+	   
+		   svg.append("g")
+			   .attr("class", "x axis")
+			   .attr("transform", "translate(0," + dim.h + ")")
+	   
+		   svg.append("g")
+			   .attr("class", "y axis");
+
+			Tooltip = d3.select("#chart")
+			    .append("div")
+			    .attr("class", "tooltip")
+			    .style("display", "inline");
+	   }
+
+   	   function draw_legend(dst_tags, data) {
+            var barNamesStack = [];
+            var barNamesStackReverse = [];
+            for (var i=0; i<barNames.length; i++) {
+               for (var j=0; j<dst_tags.length; j++) {
+                  barNamesStack.push(barNames[i] + '-' + dst_tags[j]);
+                  barNamesStackReverse.push(barNames[i] + '-' + dst_tags[dst_tags.length - 1 - j]);
+               }
+            }
+   
+   		   var buttons = svg.append("g")
+   				  .attr("font-family", "sans-serif")
+   				  .attr("font-size", 12)
+   			   .selectAll("g")
+   			   .data(['Zoom Out'])
+   			   .enter().append("g");
+   
+   		   buttons.append("circle")
+   			   .attr("cx", dim.l)
+   			   .attr("cy", dim.t)
+   			   .attr("r", 9)
+   			   .style("stroke", "red")
+   			   .style("fill", "pink")
+   			   .on("click",function(d, i){	  
+   				   var data = transform_data(dst_tags, raw_data, "day");	
+   				   draw_chart(dst_tags, data);		 
+   			   });
+   
+   		   buttons.append("text")
+   			  .attr("x", dim.l + 18)
+   			  .attr("y", dim.t)
+   			  .attr("dy", "0.32em")
+   			  .text(function(d) {return d;});
+   
+   		   var legend = svg.append("g")
+   			   .attr("font-family", "sans-serif")
+   			   .attr("font-size", 12)
+   			   .attr("text-anchor", "start")
+   			 .selectAll("g")
+   			 .data(barNamesStackReverse)
+   			 .enter().append("g")
+   			   .attr("transform", function(d, i) { return "translate(0," + i * 20 + ")"; });
+  
+   		   legend.append("rect")
+   			  .attr("x", dim.w - 10)
+   			  .attr("width", 19)
+   			  .attr("height", 19)
+   			  .attr("fill", function(d, i) {
+                  var name = d.substring(6,d.length);
+                  return colorStack(name)
+               });
+   
+   		   legend.append("text")
+   			  .attr("x", dim.w + 12)
+   			  .attr("y", 9.5)
+   			  .attr("dy", "0.32em")
+   			  .text(function(d) { return d.substring(6,d.length); });
+   	   }
+
+         function mouseover() {
+            Tooltip.style("display", "inline");
+         }
+
+         function mousemove(d) {
+            var numcalls = d.value[1] - d.value[0];
+            var label = "<p>" + " " + d.name + " " + numcalls + "</p>"; 
+            Tooltip
+               .html(label)
+               .style("left", (d3.event.pageX - 34) + "px")
+               .style("top", (d3.event.pageY - 12) + "px")
+               .style("opacity", "1");
+         }
+
+         function mouseout() {
+            Tooltip.style("display", "none");
+         }
+
+	   function draw_chart(dst_tags, data) {		
+		   var xticks = data.map(function(d) { return d.time; });	
+		   
+		   x0.domain(xticks);		 
+		   x1.domain(barNames).rangeRoundBands([0, x0.rangeBand()]);
+		   
+		   var fxticks; 
+		   if (xticks.length > 50) {
+			   fxticks = xticks.filter(function(d, i) { return !(i % 2); });
+		   } else {
+			   fxticks = xticks.filter(function(d, i) { return !(i % 1); });
+		   }
+		   xAxis.tickValues( fxticks );			   
+		   
+		   y0.domain([0, d3.max(data, function(d) {
+			   return d.total_calls;
+		   })]);
+
+		   // update existing data
+		   var period = svg.selectAll(".period")
+			   .data(data)
+			   .attr("class", "period");
+   
+		   // append new data
+		   period.enter()
+			   .append("g")
+			   .attr("class", "period");
+
+		   period
+			   .attr("transform", function(d) {
+				   return "translate(" + x0(d.time) + ",0)"; 
+			   })			 
+			   .on("click",function(d, i){		 
+				   var match = /(\d+)-?(\d+)?-?(\d+)? ?(\d+)?:?(\d+)?:?(\d+)?/.exec(x0.domain()[i]);
+				   var year = match[1];			   
+				   var month = match[2];			
+				   var day = match[3];			  
+				   var hour = match[4];			   
+				   var minute = match[5];			 
+				   var second = match[6];	   
+				   var zoomed_data = zoomin_hour(dst_tags, raw_data, year, month, day);
+				   draw_chart(dst_tags, zoomed_data);
+			   })
+		   
+		   // remove stale data
+		   period.exit().remove();
+						   
+		   // remove existing bars
+		   period.selectAll("rect").remove();
+		   
+		   // redraw bars
+		   period.selectAll("rect")
+			   .data(function(d) {
+				   return d.stats
+			   }).enter().append("rect")
+			   .attr("width", x0.rangeBand())
+			   .attr("x", function(d) { 
+               x1(d.name)
+			   })
+			   .attr("y", function(d) { 
+				   return y0(d.value[1]); 
+			   })
+			   .attr("height", function(d) {  
+				   return y0(d.value[0]) - y0(d.value[1]); 
+			   })
+			   .style("fill", function(d) { 
+				  return colorStack(d.name); 
+            })
+         	.on("mouseover", mouseover)
+            .on("mousemove", function(d) {mousemove(d)})
+            .on("mouseout", mouseout);
+
+		   svg.select(".x.axis")
+			   .call(xAxis)
+			   .selectAll("text")  
+			   .style("text-anchor", "end")
+			   .attr("dx", "-.8em")
+			   .attr("dy", ".15em")
+			   .attr("transform", "rotate(-25)" );
+	   
+		   svg.selectAll(".y.axis")
+			   .each(function(d, i) {
+				   d3.select(this).call(yAxisLeft);					   
+			   })		 
+
+		   draw_legend(dst_tags, data);
+	   }		
+
+	   function make_date(input, begin) {		 
+		  var year = input.getFullYear()
+		  var month = input.getMonth()
+		  var day = input.getDate()
+		  if (begin) {
+			return new Date(year, month, day, 0, 0, 0, 0);
+		  } else {
+			return new Date(year, month, day, 23, 59, 0, 0);
+		  }
+	   }
+
+	   function convert_to_local(d) {
+		   return moment.utc(d).local().format(DATETIME_FORMAT_MOMENT);
+	   }
+
+	   function convert_to_utc(d) {
+		   return moment.utc(moment(d, DATETIME_FORMAT_MOMENT)).format(DATETIME_FORMAT_MOMENT)
+	   }
+
+      function draw_table_toolbar(search_key) {
+         html = '<div id="table_toolbar">'
+         //html += '<button type="button" class="btn btn-default pull-right" id="gen_alert"><span class="glyphicon glyphicon-bell" aria-hidden="true" style="color:orange"></span></button>'
+         html = '<div class="btn-group toolbar pull-right">'
+         html += '<button class="btn btn-default" type="button" id="export_csv"><i class="glyphicon glyphicon-export"></i></button>'
+         html += '</div>'
+         html += '<div class="toolbar toolbar pull-right">'
+         html += '<input id="table_toolbar_search" type="text" class="form-control" placeholder="Search..." aria-describedby="basic-addon1" value="' + search_key + '">'
+         html += '</div>'
+         html += '</div>'
+         html += '</div>'
+         return html
+      }
+
+	   function draw_table(data) {
+        html = '<div id="table">'
+        html += '<table class="selfietable"><tbody>'
+        html += '<tr><th rowspan="3" style="white-space:nowrap;border-right:1px solid #d8d8d8">Time</th>'
+        html += '<th colspan="1" style="border-right:1px solid #d8d8d8">Src</th>'
+        html += '<th colspan="1" style="border-right:1px solid #d8d8d8">Dst</th>'
+        html += '<th rowspan="3" style="border-right:1px solid #d8d8d8">Dur <br />(s)</th>'
+        html += '<th colspan="2" style="border-right:1px solid #d8d8d8">Bandwidth</th>'
+        html += '<th colspan="6" style="border-right:1px solid #d8d8d8">Video</th>'
+        html += '<th colspan="6" style="border-right:1px solid #d8d8d8">Audio</th>'
+        html += '<th colspan="3">Content</th></tr>'
+        html += '<tr><th rowspan="2" style="border-right:1px solid #d8d8d8">Addr</th>'
+        html += '<th rowspan="2">Addr</th><th rowspan="2">Tx</th><th rowspan="2" style="border-right:1px solid #d8d8d8">Rx</th>'
+		  html += '<th colspan="2">Pkt</th><th colspan="2">Lost</th><th colspan="2"  style="border-right:1px solid #d8d8d8">Jitter (&mu;s)</th>'
+		  html += '<th colspan="2" style="border-left:1px solid #d8d8d8">Pkt</th><th colspan="2">Lost</th><th colspan="2" style="border-right:1px solid #d8d8d8">Jitter (&mu;s)</th>'
+		  html += '<th colspan="1" style="border-left:1px solid #d8d8d8">Pkt</th><th colspan="1">Lost</th><th colspan="1">Jitter (&mu;s)</th></tr>'
+		  html += '<tr><th style="border-left:1px solid #d8d8d8">Tx</th><th>Rx</th><th>Tx</th><th>Rx</th><th>Tx</th><th style="border-right:1px solid #d8d8d8">Rx</th>'
+		  html += '<th style="border-left:1px solid #d8d8d8">Tx</th><th>Rx</th><th>Tx</th><th>Rx</th><th>Tx</th><th style="border-right:1px solid #d8d8d8">Rx</th>'
+		  html += '<th style="border-left:1px solid #d8d8d8">Rx</th><th>Rx</th><th>Rx</th></tr>'
+		  data.forEach((row, id) => {
+			 html += '<tr>'
+			 html += '<td style="white-space:nowrap;text-align:left;border-right:1px solid #d8d8d8">' + convert_to_local(row['time']) + '</td>'
+			 html += '<td style="text-align:left;border-right:1px solid #d8d8d8">' + row['src_uri'] + '</td>'
+			 html += '<td style="text-align:left;border-right:1px solid #d8d8d8">' + row['dst_uri'] + '</td>'
+			 html += '<td style="border-right:1px solid #d8d8d8">' + row['duration'] + '</td>'
+			 html += '<td>' + row['TxBw'] + '</td>'
+			 html += '<td style="border-right:1px solid #d8d8d8">' + row['RxBw'] + '</td>'
+			 html += '<td>' + row['video_TxPkt'] + '</td>'
+			 html += '<td>' + row['video_RxPkt'] + '</td>'
+			 html += '<td>' + row['video_TxLost'] + '</td>'
+			 html += '<td>' + row['video_RxLost'] + '</td>'
+			 html += '<td>' + row['video_TxJitter'] + '</td>'
+			 html += '<td style="border-right:1px solid #d8d8d8">' + row['video_RxJitter'] + '</td>'
+			 html += '<td>' + row['audio_TxPkt'] + '</td>'
+			 html += '<td>' + row['audio_RxPkt'] + '</td>'
+			 html += '<td>' + row['audio_TxLost'] + '</td>'
+			 html += '<td>' + row['audio_RxLost'] + '</td>'
+			 html += '<td>' + row['audio_TxJitter'] + '</td>'
+			 html += '<td style="border-right:1px solid #d8d8d8">' + row['audio_RxJitter'] + '</td>'
+			 html += '<td>' + row['content_RxPkt'] + '</td>'
+			 html += '<td>' + row['content_RxLost'] + '</td>'
+			 html += '<td>' + row['content_RxJitter'] + '</td>'
+			 html += '</tr>'
+		  })
+         html += "</tbody></table></div>"
+		  return html
+	   }			  
+
+	  function get_time_range() {
+		 var start_time = $("#dtpicker-start").find("input").val();
+		 var end_time = $("#dtpicker-finish").find("input").val();
+		 return [convert_to_utc(start_time), convert_to_utc(end_time)]
+	  }
+        
+     function get_search_key() {
+        var search_key = $("#table_toolbar_search").val()
+        return (typeof search_key==='undefined') ? "*" : search_key
+     }
+
+      function get_page_size() {
+         var ps = $("#sel-options" ).val();
+         return (typeof ps ==='undefined') ? DefaultPageSize : ps;
+      }
+
+	  function page_idx(html) {
+		 var matches = html.match(/pageIdx-([0-9]+)/);
+		 if (!matches) {
+			return	0
+		 }
+		 return parseInt(matches[1], 10);
+	  }
+   
+	  function active_page_idx() {
+		 var elem = $('ul').find('li.active').find('a');
+		 var pid = 0;
+		 if (elem.length > 0) {
+			pid = page_idx(elem[0].id);
+		 }
+		 return pid;
+	  }
+
+	  function pageClicked(e, NumPages) {
+       var search_key = get_search_key()
+		 var pageIdx;
+		 var iid = $(e).attr("id");
+		 if (iid==="pageIdx-prev" || iid==="pageIdx-next") {
+			var activePageIdx = active_page_idx();
+			if (iid==="pageIdx-prev") {
+			   pageIdx = activePageIdx - 1;
+			}
+			if (iid==="pageIdx-next") {
+			   pageIdx = activePageIdx + 1;
+			}
+			if (pageIdx >= 0 && pageIdx < NumPages) {
+            update_table(pageIdx)
+			}
+			return
+		 }
+		 pageIdx = page_idx(iid);
+       update_table(pageIdx)
+	  }
+
+	  function draw_table_pagination(ppage_size, page_idx, total_entries) {
+		 var WindowSize = DefaultWindowSize;		  
+       var page_size
+       if (ppage_size==="all") {
+          page_size = total_entries
+       } else {
+          page_size = parseInt(ppage_size, 10)
+       }
+		 var d, m
+       if (page_size > 0) {
+		   d = Math.floor(total_entries / page_size);
+		   m = total_entries % page_size;
+		   if (m > 0) {
+			   d += 1;
+		   }
+       } else {
+         d = 0
+         m = 0
+       }
+       var f = page_idx * page_size + 1;
+       var ff = total_entries > 0 ? f : 0;
+       var l = f + page_size - 1;
+       var ll = l > total_entries ? total_entries : l;
+       html = '<div id="table_pagination">'; 
+       html += '<table class="paginationtable"><tbody>'
+       html += '<tr><td style="text-align:left"> Showing ' + ff + ' to ' + ll + ' of ' +  total_entries + ' rows</td>'
+       html += '<td><select id="sel-options" class="form-control">'
+       for (i=1; i<4; i++) {
+         var v = i * DefaultPageSize;
+         html += '<option value="' + v + '"';
+         if (v===page_size) {
+            html += ' selected="selected"' 
+         }
+         html += '>' + v + '</option>'
+       }
+       html += '<option value="all"'
+       if (ppage_size==="all") {
+         html += ' selected="selected"' 
+       }
+       html += '>all</option>'
+       html += '</select></td><td style="text-align:left">records per page</td>'
+       html += '<td style="text-align:right"><nav aria-label="pagination">';
+       html += '<ul class="pagination">';
+       html += '<li><a href="#" id="pageIdx-prev" aria-label="Previous" onclick="pageClicked(this,' + eval(d) +')"><span aria-hidden="true">&laquo;</span></a></li>';
+       var ii = page_idx - Math.floor(WindowSize / 2);
+       var ff = page_idx + Math.floor(WindowSize / 2);
+  		 if (ii < 0) {
+         ii = 0
+  		 }
+  		 if (ff >= d) {
+  			ii = Math.max(0, d - WindowSize);
+  		 }
+  		 for (i=0; i<WindowSize; i++) {
+  			var idx = ii + i;
+  			if (idx >= d) {
+  			   break
+  			}
+  			var liclass="";
+  			if (page_idx===idx) {
+  			   liclass	= "active";
+  			}
+  			html += '<li class="page-item ' + liclass + '"><a class="page-link" id="pageIdx-'+ idx + '" href="#" onclick="pageClicked(this,' + eval(d) +')">';
+  			html += eval(idx+1) + '</a></li>';
+  		 }
+  		 html += '<li><a href="#" id="pageIdx-next" aria-label="Next" onclick="pageClicked(this,' + eval(d) +')"><span aria-hidden="true">&raquo;</span></a></li>';
+  		 html += '</ul>';
+       html += '</nav></td>';
+       html += '</tr>'
+       html += '</tbody>'
+       html += '</table>'
+       html += '</div>'
+  		 return html;
+ 	  }
+ 
+       function update_table(page_idx) {
+          var time_range_utc = get_time_range() 
+          var search_key = get_search_key()
+          var page_size = get_page_size()
+          $.ajax({
+             type: "POST",
+             url: $SCRIPT_ROOT + '/selfie/api/usage',
+             data: {
+                'start_time': time_range_utc[0], 
+                'end_time': time_range_utc[1], 
+                'page_size': page_size, 
+                'page_idx': page_idx,
+                'search_key': search_key}
+             }).success(
+                function(resp) {
+                   html = draw_table_toolbar(search_key)
+                   $('#table_toolbar').replaceWith(html);
+                   html = draw_table(resp['Entries']);
+                   $('#table').replaceWith(html);
+                   html = draw_table_pagination(page_size, page_idx, resp.TotalEntries)
+                   $('#table_pagination').replaceWith(html);
+ 			      }
+             ).error(
+                function(xhr, status, text) {
+                   gen_alert(xhr)
+ 				   }
+             );
+ 		}
+ 
+       function update_chart(reset_search_key=false) {
+          var search_key = get_search_key(reset_search_key)
+          var time_range_utc = get_time_range() 
+          $.ajax({
+             type: "POST",
+             url: $SCRIPT_ROOT + '/selfie/api/usage/d3js',
+             data: {
+                'start_time': time_range_utc[0], 
+                'end_time': time_range_utc[1], 
+                'search_key': search_key}
+          }).success(
+             function(resp) {
+ 		         d3.select("svg").remove();
+                dst_tags = resp.dst_tags;
+                raw_data = resp.d3data;
+                init_graph(dst_tags);
+                var data = transform_data(dst_tags, raw_data, 'day');
+                draw_chart(dst_tags, data);
+                update_table(0)
+             }   
+          ).error(
+             function(xhr, status, text) {
+                gen_alert(xhr)
+             }
+         );
+       }
+
+      function get_selfie_addrs() {
+         return new Promise((resolve, reject) => {
+            $.ajax({
+             type: "GET",
+             url: $SCRIPT_ROOT + '/alerts/api/selfie/addrs',
+            }).done(
+               function(resp) {
+                  resolve(resp['result']);
+               }
+            ).fail(
+               function(xhr, status, text) {
+                  reject(xhr)
+               }
+            )
+         })
+      }
+
+      function get_alerts() {
+         return new Promise((resolve, reject) => {
+            $.ajax({
+             type: "GET",
+             url: $SCRIPT_ROOT + '/alerts/api/alerts',
+            }).done(
+               function(resp) {
+                  resolve(resp['result']);
+               }
+            ).fail(
+               function(xhr, status, text) {
+                  reject(xhr)
+               }
+            )
+         })
+      }
+
+      function modify_alert(alert, method) {
+         return new Promise((resolve, reject) => {
+            var url = $SCRIPT_ROOT + '/alerts/api/alert';
+            if (method==="PATCH" || method=="DELETE") {
+               url += "/" + alert["alert_id"];
+            }
+            $.ajax({
+             type: method,
+             url,
+             data: {...alert}
+            }).done(
+               function(resp) {
+                  resolve(resp['result']);
+               }
+            ).fail(
+               function(xhr, status, text) {
+                  reject(xhr)
+               }
+            )
+         })
+      }
+
+       function download_csv() {
+          var time_range_utc = get_time_range() 
+          start_time_utc = time_range_utc[0] 
+          end_time_utc = time_range_utc[1] 
+          var search_key = get_search_key()
+          $.ajax({
+             type: "POST",
+             url: $SCRIPT_ROOT + '/selfie/api/usage/csv',
+             data: {
+                'start_time': start_time_utc, 
+                'end_time': end_time_utc, 
+                'search_key': search_key}
+             }).success(
+                function(resp) {
+                  fname = "selfie_" + start_time_utc.replace(/ /g, "_") + "utc_" + end_time_utc.replace(/ /g, "_") + "utc.csv"
+                  var uri = 'data:application/csv;charset=UTF-8,' + encodeURIComponent(resp);
+                  var link = document.createElement("a");
+                  link.setAttribute("href", uri);
+                  link.setAttribute("download", fname);
+                  document.body.appendChild(link);
+                  link.click();
+ 			      }
+             ).error(
+                function(xhr, status, text) {
+                   gen_alert(xhr);
+ 				   }
+             );
+          }
+
+      function fn(n) {
+         return (n * 100.0).toFixed(2);
+      }
+
+      function gen_alerts_table_row(alert, dst_addrs, tag) {
+         var idx = alert['alert_id'];
+         var html = '<tr class="' + tag + '" id="' + tag + '-' + idx + '">';
+         html += '<td class="merge_cell">'
+         if (tag==="alert") {
+            html += '<a href="javascript:remove_alert(' + idx + ')">'
+            html += '<span class="glyphicon glyphicon-remove-circle" aria-hidden="true" style="color:red"></span></a></td>'
+         } else {
+            html += '<a href="javascript:create_alert(' + idx + ')">'
+            html += '<span class="glyphicon glyphicon-floppy-save" aria-hidden="true"></span></a></td>'
+         }
+         html += '<td class="merge_cell"><input type="text" class="' + tag +'-modify" id="' + tag + '-src_addr-' + idx + '" value="' + alert['src_addr'] + '"></input></td>';
+         if (dst_addrs.length > 0) {
+	         html += '<td class="merge_cell"><select id="' + tag + '-dst_addr-' + idx + '" class="' + tag +'-modify-option">'
+		      dst_addrs.forEach((dst_addr, i) => {
+	            attr = dst_addr===alert['dst_addr'] ? 'selected' : '' 
+	            html += '<option value="' + dst_addr + '" ' + attr + ' >' + dst_addr + '</option>'
+		      })
+	         html += '</select></td>'
+         } else {
+            html += '<td class="merge_cell"><input type="text" class="' + tag +'-modify" id="' + tag + '-dst_addr-' + idx + '" value="' + alert['dst_addr'] + '"></input></td>';
+         }
+         html += '<td class="merge_cell"><input type="number" class="' + tag +'-modify" id="' + tag + '-video_tx_lost-' + idx + '" value="' + fn(alert['video_tx_lost']) + '"></input></td>';
+         html += '<td class="merge_cell"><input type="number" class="' + tag +'-modify" id="' + tag + '-video_rx_lost-' + idx + '" value="' + fn(alert['video_rx_lost']) + '"></input></td>';
+         html += '<td class="merge_cell"><input type="number" class="' + tag +'-modify" id="' + tag + '-audio_tx_lost-' + idx + '" value="' + fn(alert['audio_tx_lost']) + '"></input></td>';
+         html += '<td class="merge_cell"><input type="number" class="' + tag +'-modify" id="' + tag + '-audio_rx_lost-' + idx + '" value="' + fn(alert['audio_rx_lost']) + '"></input></td>';
+         html += '<td class="merge_cell"><input type="number" class="' + tag +'-modify" id="' + tag + '-content_rx_lost-' + idx + '" value="' + fn(alert['content_rx_lost']) + '"></input></td>';
+         html += '<td class="merge_cell"><textarea rows="2" class="' + tag +'-modify" id="' + tag + '-dst_email-' + idx + '">' + alert['dst_email'] + '</textarea></td>';
+         return html;
+      }
+
+      function gen_alerts_table(alerts, dst_addrs) {
+         var html = '<div class="table-responsive">'
+         var html = '<table class="table table-bordered table-font alerts_table" id="alerts_table">'
+         html += '<tr><th rowspan="2" class="merge_cell"><a href="javascript:add_new_alert_row()"><span class="glyphicon glyphicon-plus" aria-hidden="true" style="color:green"></span></a></th>'
+         html += '<th rowspan="2" style="width:60px" class="merge_cell">Src Addr</th><th rowspan="2" class="merge_cell">Dst Addr</th>'
+	      html += '<th colspan="2">Video Loss(%)</th>'
+	      html += '<th colspan="2">Audio Loss(%)</th><th style="width:80px">Content Loss(%)</th>'
+         html += '<th rowspan="2" class="merge_cell">Recipient(s)</th></tr>'
+	      html += '<tr>'
+         html += '<th>Tx</th><th>Rx</th><th>Tx</th><th>Rx</th><th>Rx</th></tr>'
+		   alerts.forEach(alert => {
+            var tag = alert['alert_id']===0 ? "new_alert" : "alert"; 
+	         html += gen_alerts_table_row(alert, dst_addrs, tag)
+		   })
+         html += '</table></div>'
+         return html;
+      }
+
+      function gen_config_alert_modal_body(alerts, dst_addrs) {
+         var html = '<div class="modal-body" id="ModalConfigAlert-body" val="">'
+         html += '<div id="ModalConfigAlert-err-msg"></div>'
+         html += gen_alerts_table(alerts, dst_addrs);
+	      html += '</div>'
+         return html;
+      }
+
+      function gen_modal_config_alert() {
+         var html = Utils.gen_modal("ModalConfigAlert", "Alert Rules", "ModalConfigAlert-body", "ModalConfigAlert-edit", false, "Save")
+         $("#ModalConfigAlert").replaceWith(html);
+      }
+
+      function init_alert() {
+         return {
+            alert_id: 0,
+            name: "",
+            src_addr: "any", 
+            dst_addr: "any", 
+            video_tx_lost: 0.00,
+            video_rx_lost: 0.00,
+            audio_tx_lost: 0.00,
+            audio_rx_lost: 0.00,
+            content_rx_lost: 0.00,
+            dst_email: ""
+         }
+      }
+
+      function get_alert_from_modal(tag, idx) {
+         var name = $("#" + tag + "-name-" + idx).val();
+         var src_addr = $("#" + tag + "-src_addr-" + idx).val();
+         var dst_addr_cntrl = $("#" + tag + "-dst_addr-" + idx);
+         if (dst_addr_cntrl.is("input")) {
+	         dst_addr = dst_addr_cntrl.val();
+         } else {
+	         var dst_addr = dst_addr_cntrl.find(":selected").text();
+         }
+         var video_tx_lost = parseFloat($("#" + tag + "-video_tx_lost-" + idx).val()) / 100;
+         var video_rx_lost = parseFloat($("#" + tag + "-video_rx_lost-" + idx).val()) / 100;
+         var audio_tx_lost = parseFloat($("#" + tag + "-audio_tx_lost-" + idx).val()) / 100;
+         var audio_rx_lost = parseFloat($("#" + tag + "-audio_rx_lost-" + idx).val()) /100;
+         var content_rx_lost = parseFloat($("#" + tag + "-content_rx_lost-" + idx).val()) / 100;
+         var dst_email = $("#" + tag + "-dst_email-" + idx).val().split(/\s+/).join(' ');
+         return {
+            alert_id: idx,
+            name,
+            src_addr, 
+            dst_addr, 
+            video_tx_lost,
+            video_rx_lost,
+            audio_tx_lost,
+            audio_rx_lost,
+            content_rx_lost,
+            dst_email
+         }
+      }
+
+      function gen_alerts() {
+         get_alerts().then(function(alerts) {
+            if (alerts.length===0) {
+               alerts = [init_alert()];
+            }
+            get_selfie_addrs().then(function(dst_addrs) {
+               var html = gen_config_alert_modal_body(alerts, dst_addrs);
+	            $("#ModalConfigAlert-body").replaceWith(html)
+               $('#ModalConfigAlert').modal('show');
+	         }).catch(xhr => {
+               var html = gen_config_alert_modal_body(alerts, []);
+	            $("#ModalConfigAlert-body").replaceWith(html)
+               $('#ModalConfigAlert').modal('show');
+            })
+         }).catch(xhr => {
+            gen_alert(xhr)
+         })
+      }
+
+      function add_new_alert_row() {
+         var cnt = $('.new_alert').length
+         var new_alert = init_alert();
+         new_alert['alert_id'] = cnt;
+         var html;
+         get_selfie_addrs().then(function(dst_addrs) {
+	         html = gen_alerts_table_row(new_alert, dst_addrs, "new_alert");
+            $('#alerts_table tr:last').after(html);
+	      }).catch(xhr => {
+	         html = gen_alerts_table_row(new_alert, [], "new_alert");
+            $('#alerts_table tr:last').after(html);
+         })
+      }
+
+      function create_alert(idx) {
+         var new_alert = get_alert_from_modal("new_alert", idx)
+         delete new_alert['alert_id']
+         modify_alert(new_alert, "POST").then(function(result) {
+            gen_alerts();
+         }).catch(xhr => {
+            var html = gen_alert_html(gen_alert_error(xhr))
+            $("#ModalConfigAlert-err-msg").append(html);
+         })
+      }
+
+      function save_alert(new_alert) {
+         modify_alert(new_alert, "PATCH").then(function(result) {
+            gen_alerts();
+         }).catch(xhr => {
+            var html = gen_alert_html(gen_alert_error(xhr))
+            $("#ModalConfigAlert-err-msg").append(html);
+         })
+      }
+
+      function remove_alert(idx) {
+         var selfie_alert = get_alert_from_modal("alert", idx); 
+         var r = confirm("Are you sure you want to delete the selected alert rule ?");
+         if (r===false) {
+            return
+         }
+         modify_alert(selfie_alert, "DELETE").then(function(result) {
+            gen_alerts();
+         }).catch(xhr => {
+            var error = gen_alert_error(xhr);
+            var html = gen_alert_html(error);
+            $("#ModalConfigAlert-err-msg").append(html);
+         })
+      }
+
+ 	   $(function () {
+          gen_modal_config_alert();
+
+          var curDate = new Date();
+          var endDate = make_date(curDate, false);
+          curDate.setDate(curDate.getDate() - 14);
+          var startDate = make_date(curDate, true);
+          ['#dtpicker-start', '#dtpicker-finish'].forEach(d=>{
+             $(d).datetimepicker({
+                defaultDate: d==='#dtpicker-start' ? moment(startDate) : moment(endDate),
+                format: DATETIME_FORMAT_MOMENT,
+                sideBySide: true
+             });
+          })
+ 
+          $('#query_usage').bind('click', function(e) {
+            $("#table_toolbar_search").val("*")
+            update_chart()
+          });
+ 
+          $(document).on('keypress', '#table_toolbar_search', function (e) {
+            if (e.which===13) {
+               update_chart()
+            }
+         })
+
+         $(document).on("keypress", ".alert-modify", function(e) {
+            if (e.keyCode===13) {
+               var iid = $(this).attr('id')
+               var matches = iid.match(/alert-(.*)-([0-9]+)/);
+               var field = matches[1] 
+               var value = this.value
+               if (field==="video_tx_lost" || field==="video_rx_lost" ||
+                  field==="audio_tx_lost" || field==="audio_rx_lost" ||
+                  field=="content_rx_lost") {
+                  value = parseFloat(value) / 100;
+               }
+               var alert = {alert_id: matches[2], [matches[1]]: value}
+               save_alert(alert) 
+            }
+         })
+
+         $(document).on("change", ".alert-modify-option", function(e) {
+            var iid = $(this).attr('id')
+            var matches = iid.match(/alert-(.*)-([0-9]+)/);
+            var alert = {alert_id: matches[2], [matches[1]]: this.value}
+            save_alert(alert) 
+         })
+
+         $(document).on('change', '#sel-options', function(e) {
+            update_table(0)
+         })
+
+         $(document).on('click', '#export_csv', function(e) {
+            download_csv()
+         })
+
+         $(document).on('click', '#gen_alert', function(result) {
+            gen_alerts()
+         })
+
+         update_chart()
+         update_table(0)
+	  })
+	</script>
+
+	{% if current_user.is_authenticated %}
+		<h2><span class="glyphicon glyphicon-stats" aria-hidden="true"></span> Usage</h2>
+      <div class="row query-form">
+         <div class="col-sm-4">
+            <div class="input-group" id="dtpicker-start">
+               <span class="input-group-addon">Start</span>
+               <input type='text' class="form-control" placeholder="StartTime"/>
+               <span class="input-group-addon">
+                  <span class="glyphicon glyphicon-calendar"></span>
+               </span>
+            </div>
+         </div>
+         <div class="col-sm-4">
+            <div class='input-group' id='dtpicker-finish'>
+               <span class="input-group-addon">Finish</span>
+               <input type='text' class="form-control" placeholder="FinishTime"/>
+               <span class="input-group-addon">
+                  <span class="glyphicon glyphicon-calendar"></span>
+               </span>
+            </div>
+         </div>
+         <input id="query_usage" type="button" class="btn btn-primary" value="GO!"> 
+      </div>
+	   <div id="chart"></div>
+      <div id="table_toolbar"></div>
+	   <div id="table"></div>
+	   <div id="table_pagination"></div>
+      <div id="ModalConfigAlert"></div>
+	{% endif %}
+{% endblock %}

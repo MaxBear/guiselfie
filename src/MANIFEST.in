@@ -1,0 +1,19 @@
+include selfie/*.wsgi
+include selfie/*.py
+include selfie/configs/env_prod.py
+include selfie/configs/env_beta.py
+include selfie/configs/logging_prod.conf
+recursive-include selfie/templates/ *
+recursive-exclude nocadmin/static/ *.*
+recursive-exclude selfie/static/ *.*
+recursive-include selfie/static/js *.js
+recursive-include selfie/static/css *.css
+recursive-include selfie/static/images *.*
+include selfie/static/bower_components/bootstrap/dist/js/bootstrap.min.js
+recursive-include selfie/static/bower_components/bootstrap/dist/fonts *.*
+include selfie/static/bower_components/bootstrap/dist/css/bootstrap.min.css*
+include selfi/static/bower_components/bootstrap/dist/css/bootstrap-theme.min.css*
+include selfie/static/bower_components/jquery/dist/jquery.min.js
+include selfie/static/bower_components/moment/min/moment.min.js
+recursive-include selfie/static/bower_components/eonasdan-bootstrap-datetimepicker/build/js *.*
+recursive-include selfie/static/bower_components/eonasdan-bootstrap-datetimepicker/build/css *.*

@@ -1,0 +1,55 @@
+{% from "security/_macros.html" import render_field %} 
+{% from "security/login_macros.html" import render_errors, render_submit_button %}
+{% extends "layout_basic.html" %}
+{% block content %}
+   <h1><span class="glyphicon glyphicon-th-list" aria-hidden="true"></span> Selfie.VC Portal</h1>
+
+   <div class="row">
+
+	   <div class="col-md-4">
+		   <div class="hbgGray"><h2>Welcome!</h2></div>
+		   <p>Customers can inside the Selfie.VC portal view call stats and logs for own Selfie.VC app(s).</p>
+		   <div class="hbgGray"><h2>New User?</h2></div>
+		   <p>Customers subscribing to Selfie.VC services can request access to the Selfie.VC Portal by sending an
+		   email to <a href="mailto:support@selfie.vc?subject=Request for access to Selfie.VC Customer Portal">support@selfie.vc</a>
+		   from their corporate email account. </p>
+      </div>
+		<div class="col-md-4">
+         <div class="hbgGray">
+            <h2><span class="glyphicon glyphicon-log-in" aria-hidden="true"></span> Login</h2>
+         </div>
+         <div id="login">
+		      {{ render_errors(login_user_form.email, login_user_form.password) }}
+		      <form action="{{ url_for_security('login') }}" method="post" name="login_user_form" id="login_user_form">
+			      {{ login_user_form.hidden_tag() }}
+			      <div class="control-group">
+			         <label class="control-label" for="username">Email</label>
+			         <div class="controls">
+			            {{ render_field(login_user_form.email) }}
+			         </div>
+			      </div>
+			      <div class="control-group">
+			         <label class="control-label" for="inputPassword">Password</label>
+			         <div class="controls">
+			            {{ render_field(login_user_form.password) }}
+			         </div>
+			      </div>
+               <div class="control-group">
+                  <div class="controls">
+                     <br>
+			            {{ render_submit_button(login_user_form.submit) }}
+                  </div>
+               </div>
+		      </form>
+		      <a href={{ url_for_security('forgot_password') }}>Lost Password?</a>
+		   </div>
+		</div>
+
+      <div class="col-md-4">
+         <img src="/static/images/people.jpg" alt="QoS.VC" align="middle" style="margin-top:20px;">
+      </div>
+   
+   </div>
+
+{% endblock %}
+
